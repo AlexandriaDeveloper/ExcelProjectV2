@@ -1,0 +1,401 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace AutoMailProject.NPOIHelper
+{
+    using System.Data;
+    using System.IO;
+    using System.Runtime.Remoting.Messaging;
+    using System.Windows.Forms;
+
+    using NPOI.HSSF.UserModel;
+    using NPOI.SS.UserModel;
+    using NPOI.XSSF.UserModel;
+
+    public class NPOIHelper
+    {
+        private dynamic hssWB = null;
+        public NPOIHelper(string fileName)
+        {
+
+            using (Stream file = new FileStream(fileName, FileMode.Open, FileAccess.ReadWrite))
+            {
+                if (Path.GetExtension(fileName.ToLower()) == ".xls")
+                {
+                    hssWB = new HSSFWorkbook(file);
+                    file.Close();
+                }
+                else if (Path.GetExtension(fileName.ToLower()) == ".xlsx")
+                {
+                    this.hssWB = new XSSFWorkbook(file);
+                    file.Close();
+
+                }
+            }
+        }
+
+        public List<string> WorkSheetsArr(string fileName)
+        {
+
+            List<string> SheetsName = new List<string>();
+
+            for (int i = 0; i < hssWB.NumberOfSheets; i++)
+            {
+                SheetsName.Add(hssWB.GetSheetAt(i).SheetName);
+            }
+            return SheetsName;
+
+        }
+
+        public System.Data.DataTable ReadGeneralExcelSheet(string FilePath, string SheetName = "Sheet1")
+        {
+
+
+
+            ISheet sheet = hssWB.GetSheet(SheetName);
+            System.Data.DataTable dt = new System.Data.DataTable();
+
+            //decimal DueAmount = 0;
+            //decimal OutAmount = 0;
+            //decimal Net = 0;
+
+            #region Header Creation
+            var headerCode = sheet.GetRow(5);
+            var header = sheet.GetRow(6);
+            List<HeaderClass> headerList = new List<HeaderClass>();
+            int Dueindex = 0;
+            int OutIndex = 0;
+            int NetIndex = 0;
+            int NameIndex = 0;
+            List<int> headerIndex = new List<int>();
+            for (int i = 0; i < header.LastCellNum; i++)
+            {
+                if (headerCode.GetCell(i).NumericCellValue == 3111)
+                {
+                    Dueindex = i;
+                }
+
+                if (headerCode.GetCell(i).NumericCellValue == 3222)
+                {
+                    OutIndex = i;
+                }
+                if (headerCode.GetCell(i).NumericCellValue == 3333)
+                {
+                    NetIndex = i;
+                }
+                if (headerCode.GetCell(i).NumericCellValue == 3001)
+                {
+                    NameIndex = i;
+                }
+
+
+                if (!string.IsNullOrEmpty(header.GetCell(i).StringCellValue.ToString()))
+                {
+
+                    dt.Columns.Add(new DataColumn(headerCode.GetCell(i).NumericCellValue.ToString()+"-"+ header.GetCell(i).StringCellValue));
+                    headerIndex.Add(i);
+                    headerList.Add(new HeaderClass()
+                    {
+                        HeaderCode = (int)headerCode.GetCell(i).NumericCellValue,
+                        HeaderTitle = header.GetCell(i).StringCellValue,
+                        ColIndex = i
+
+                    });
+                }
+
+            }
+
+            #endregion
+
+
+            #region  Evaluater Creation
+
+
+            if (this.hssWB.GetType() == typeof(HSSFWorkbook))
+            {
+                HSSFFormulaEvaluator.EvaluateAllFormulaCells(hssWB);
+
+                HSSFFormulaEvaluator helper =
+                    (HSSFFormulaEvaluator)hssWB.GetCreationHelper().CreateFormulaEvaluator();
+            }
+            else if (this.hssWB.GetType() == typeof(XSSFWorkbook))
+            {
+                XSSFFormulaEvaluator.EvaluateAllFormulaCells(hssWB);
+
+                XSSFFormulaEvaluator helper =
+                    (XSSFFormulaEvaluator)hssWB.GetCreationHelper().CreateFormulaEvaluator();
+            }
+
+            dynamic eval = null;
+            if (this.hssWB.GetType() == typeof(HSSFWorkbook))
+            {
+                eval = new HSSFFormulaEvaluator((HSSFWorkbook)hssWB);
+            }
+            else if (this.hssWB.GetType() == typeof(XSSFWorkbook))
+            {
+                eval = new XSSFFormulaEvaluator((XSSFWorkbook)hssWB);
+                eval.evaluateAllFormulaCells(this.hssWB);
+
+            }
+
+            #endregion
+
+            #region Defin Variables
+
+            decimal GrandDueAmount = 0;
+            decimal GrandOutAmount = 0;
+            decimal GrandNetAmount = 0;
+            string Name = "";
+            #endregion
+
+            for (int row = 7; row < sheet.LastRowNum + 1; row++)
+            {
+                #region  Create Row Variables
+
+                decimal DueAmount = 0;
+
+
+
+                decimal OutAmount = 0;
+
+
+
+                decimal Net = 0;
+
+
+
+                #endregion
+
+                //get Current Row
+                IRow r = sheet.GetRow(row);
+                ICell c = null;
+                int cellnum = 0;
+                Name = r.GetCell(NameIndex).StringCellValue;
+                if (sheet.GetRow(row) != null)
+                {
+                    DataRow dr = dt.NewRow();
+
+                    //      Get Cells for Selecte Columns in Current Row
+                    foreach (var col in headerIndex)
+                    {
+                        c = r.GetCell(col);
+
+                        #region Handle  Cell Value Empty Or Not Empty
+                        if (c != null)
+                        {
+                            //reavluate cell if ut has formula and add result to datatable
+
+                            eval.EvaluateInCell(c);
+                            //round Formula to closest decimal
+                            if (c.CellType == CellType.Numeric)
+                            {
+                                dr[cellnum] = Math.Round(c.NumericCellValue, 2);
+                            }
+
+                            else
+                            {
+                                dr[cellnum] = c.StringCellValue;
+
+                            }
+                        }
+                        else
+                        {
+                            dr[cellnum] = string.Empty;
+                        }
+                        #endregion
+
+                        #region Check Cell Payment Type And Increase Varible Depend on Payment Type
+
+                        if (headerCode.GetCell(col).NumericCellValue.ToString().StartsWith("1"))
+                        {
+                            if (!string.IsNullOrEmpty(dr[cellnum].ToString()))
+
+                                DueAmount += Math.Round(Convert.ToDecimal(dr[cellnum].ToString()), 2);
+
+                        }
+                        else if (headerCode.GetCell(col).NumericCellValue.ToString().StartsWith("2"))
+                        {
+                            if (!string.IsNullOrEmpty(dr[cellnum].ToString()))
+                                OutAmount += Math.Round(Convert.ToDecimal(dr[cellnum].ToString()), 2);
+                        }
+
+                        #endregion
+
+                        //#region  Check If its Last Row And Increase Grand Variables 
+
+                        //else if (header.GetCell(col).StringCellValue.Equals("0002-الاسم") && dr[cellnum].ToString() == "الأجمالى")
+                        //{
+                        //    ///ToDo
+                        //    if (Dueindex > 1)
+                        //    {
+
+                        //        ValidateSum(Dueindex, sheet, row, GrandDueAmount, " أجمالى المستحق الكلى", Name);
+                        //    }
+                        //    if (OutIndex > 1)
+                        //    {
+
+                        //        ValidateSum(OutIndex, sheet, row, GrandOutAmount, " أجمالى المستقطع الكلى", Name);
+                        //    }
+                        //    if (NetIndex > 1)
+                        //    {
+
+                        //        ValidateSum(NetIndex, sheet, row, GrandNetAmount, " الصافى الكلى", Name);
+                        //    }
+
+                        //}
+
+                        //#endregion
+
+                        cellnum++;
+                    }
+                    Net = DueAmount - OutAmount;
+
+                    dt.Rows.Add(dr);
+                }
+
+                #region Check Total Row Values
+
+                if (Dueindex > 1)
+                {
+
+                    ValidateSum(Dueindex, sheet, row, DueAmount, "أجمالى المستحق", Name);
+                }
+                if (OutIndex > 1)
+                {
+
+                    ValidateSum(OutIndex, sheet, row, OutAmount, "أجمالى المستقطع", Name);
+                }
+                if (NetIndex > 1)
+                {
+
+                    ValidateSum(NetIndex, sheet, row, Net, "الصافى المستحق", Name);
+                }
+
+                #endregion
+
+
+                GrandDueAmount += DueAmount;
+                GrandOutAmount += OutAmount;
+                GrandNetAmount += Net;
+            }
+            return dt;
+        }
+
+        public System.Data.DataTable ReadExcelFile(string FilePath, string SheetName = "Sheet1")
+        {
+            HSSFWorkbook hssWB = null;
+            using (FileStream file = new FileStream(FilePath, FileMode.Open, FileAccess.Read))
+            {
+                hssWB = new HSSFWorkbook(file);
+                file.Close();
+            }
+
+            ISheet sheet = hssWB.GetSheet(SheetName);
+            System.Data.DataTable dt = new System.Data.DataTable();
+            dt.Columns.Add(new DataColumn("NationalId"));
+            dt.Columns.Add(new DataColumn("PaymentType"));
+            dt.Columns.Add(new DataColumn("Department"));
+            dt.Columns.Add(new DataColumn("Section"));
+            dt.Columns.Add(new DataColumn("Code"));
+            dt.Columns.Add(new DataColumn("Name"));
+            dt.Columns.Add(new DataColumn("Net"));
+            for (int row = 1; row < sheet.LastRowNum + 1; row++)
+            {
+                if (sheet.GetRow(row) != null)
+                {
+                    DataRow dr = dt.NewRow();
+                    for (int col = 0; col < sheet.GetRow(row).LastCellNum; col++)
+                    {
+                        if (sheet.GetRow(row).GetCell(col) == null)
+                        {
+                            dr[col] = string.Empty;
+                        }
+                        dr[col] = sheet.GetRow(row).GetCell(col);
+
+                    }
+                    dt.Rows.Add(dr);
+                }
+            }
+            return dt;
+        }
+
+
+
+        public void WriteXLSFile(string FileName, System.Data.DataTable dt, string SheetName = "Sheet1")
+        {
+            HSSFWorkbook wb = null;
+            using (FileStream Stream = new FileStream(FileName, FileMode.Open, FileAccess.ReadWrite))
+            {
+                wb = new HSSFWorkbook(Stream);
+
+                Stream.Close();
+            }
+            ISheet sheet = wb.GetSheet(SheetName);
+            for (int row = 0; row < dt.Rows.Count; row++)
+            {
+                IRow currenRow = sheet.CreateRow(row + 1);
+                for (int CellNum = 0; CellNum < dt.Columns.Count; CellNum++)
+                {
+                    ICell cell = currenRow.CreateCell(CellNum);
+                    if (CellNum == 6)
+                    {
+                        cell.SetCellType(CellType.Numeric);
+                        cell.SetCellValue(Convert.ToDouble(dt.Rows[row].ItemArray[CellNum].ToString()));
+                    }
+                    else
+                    {
+                        cell.SetCellValue(dt.Rows[row].ItemArray[CellNum].ToString());
+                    }
+
+                }
+
+            }
+            using (FileStream Stream1 = new FileStream(FileName, FileMode.Create, FileAccess.ReadWrite))
+            {
+                wb.Write(Stream1);
+                wb.Close();
+                Stream1.Close();
+            }
+        }
+
+        private bool ValidateSum(int index, dynamic sheet, int row, decimal Amount, string sumName, string Name)
+        {
+            // int index = header.FirstOrDefault(x => x.StringCellValue == "أجمالى المستحق").ColumnIndex;
+            if (Convert.ToDecimal(sheet.GetRow(row).GetCell(index).NumericCellValue) != Amount)
+            {
+                MessageBox.Show(
+                    string.Format(
+                        " {2} يجب ان يكون {0} بدلا من {1} بصف {3}",
+                        Amount,
+                        Convert.ToDecimal(sheet.GetRow(row).GetCell(index).NumericCellValue),
+                        sumName, Name));
+                return false;
+            }
+            return true;
+        }
+
+    }
+
+    public class Content
+    {
+        public int AccountId { get; set; }
+
+        public string AccountName { get; set; }
+
+        public string AccountValue { get; set; }
+   
+
+    }
+
+    public class HeaderClass
+    {
+        public int HeaderCode { get; set; }
+
+        public string HeaderTitle { get; set; }
+
+        public int ColIndex { get; set; }
+    }
+}
